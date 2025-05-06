@@ -1,4 +1,5 @@
 
+#include "stdint.h"
 #include "cmsis_armclang.h"
 #include "serial_debugger.h"
 #include "serial_config.h"
@@ -35,7 +36,7 @@ DebugConfig_t debugConf = {
 #define H1              (2  - 1)
 #define H10             (1  - 1)
 
-static const uint8_t  __FOOTER[]           = {'\n'}   ;
+static const uint8_t  __FOOTER[]           = "\n"     ;
 static const uint8_t  __TRACE_LABEL[]      = "<TRC> " ;
 static const uint8_t  __INFO_LABEL[]       = "<INF> " ;
 static const uint8_t  __WARNING_LABEL[]    = "<WRN> " ;
@@ -77,14 +78,10 @@ static void __debug_copyFrom (const void* DATA, uint16_t len) {
     memcpy(bufTx[activeBufTx] + indexTx, DATA, len);
     indexTx += len;
   }
-  else if(__debug_dma_trig() == true) {
-    memcpy(bufTx[activeBufTx] + indexTx, DATA, len);
-    indexTx += len;
-  }
-  if (len + indexTx < DEBUG_TX_BUF_LEN) {
-    memcpy(bufTx + indexTx , DATA, len);
-    indexTx += len;
-  }
+//  else if(__debug_dma_trig() == true) {
+//    memcpy(bufTx[activeBufTx] + indexTx, DATA, len);
+//    indexTx += len;
+//  }
 }
 //------------------------------------------------------------------------
 static void vTimerCallback (TimerHandle_t xTimer) {
@@ -213,6 +210,7 @@ bool debug_init (void) {
   status = status && (xQueueSend(tsMailBox, ts, 0)) == pdPASS;
   status = status && (xTimerStart(hTsTimer, 0)) == pdPASS;
   status = status && (mutexTx = xSemaphoreCreateMutex()) != NULL;
+  status = status && (streamRx = xStreamBufferCreate(DEBUG_RX_PACKET_LEN_MAX, 1)) != NULL;
   status = status && drv_hw_driver_init();
   status = status && xTaskCreate(&serviceDebugTx, "DBG_TX",   DEBUG_TX_STACK_SIZE,   NULL, DEBUG_TX_TASK_PRIORITY,   &hTaskTx)   == pdTRUE;
   status = status && xTaskCreate(&serviceDebugRx, "DBG_RX",   DEBUG_RX_STACK_SIZE,   NULL, DEBUG_RX_TASK_PRIORITY,   &hTaskRx)   == pdTRUE;
@@ -229,17 +227,18 @@ uint32_t debug_transmit (uint8_t level, uint8_t argLen, const char* FORMAT, ...)
     if (xSemaphoreTakeFromISR(mutexTx, NULL) == pdTRUE) {
       __debug_copyFrom(LOG_LEVEL_STRING[level], sizeof(__TRACE_LABEL) - 1);
       xQueuePeekFromISR(tsMailBox, ts);
-      __debug_copyFrom(ts, sizeof(ts));
+      __debug_copyFrom(ts, sizeof(ts) - 1);
       if (argLen == 1) {
         __debug_copyFrom((uint8_t*)FORMAT, strlen(FORMAT));
       }
       else {
         va_list args;
         va_start(args, FORMAT);
-        vsnprintf((char*)(bufTx + indexTx), DEBUG_TX_BUF_LEN - indexTx - sizeof(__FOOTER), FORMAT, args);
+        uint32_t __len = vsnprintf((char*)(bufTx[activeBufTx] + indexTx), DEBUG_TX_BUF_LEN - indexTx - sizeof(__FOOTER) + 1, FORMAT, args);
+        indexTx += __len;
         va_end(args);
       }
-      __debug_copyFrom(__FOOTER, sizeof(__FOOTER));
+      __debug_copyFrom(__FOOTER, sizeof(__FOOTER) - 1);
       vTaskNotifyGiveFromISR(hTaskTx, NULL);
       xSemaphoreGiveFromISR(mutexTx, NULL);
     }
@@ -249,17 +248,18 @@ uint32_t debug_transmit (uint8_t level, uint8_t argLen, const char* FORMAT, ...)
     if (xSemaphoreTake(mutexTx, pdMS_TO_TICKS(0)) == pdTRUE) {
       __debug_copyFrom(LOG_LEVEL_STRING[level], sizeof(__TRACE_LABEL) - 1);
       xQueuePeek(tsMailBox, ts, 0);
-      __debug_copyFrom(ts, sizeof(ts));
+      __debug_copyFrom(ts, sizeof(ts) - 1);
       if (argLen == 1) {
         __debug_copyFrom((uint8_t*)FORMAT, strlen(FORMAT));
       }
       else {
         va_list args;
         va_start(args, FORMAT);
-        vsnprintf((char*)(bufTx + indexTx), DEBUG_TX_BUF_LEN - indexTx - sizeof(__FOOTER), FORMAT, args);
+        uint32_t __len = vsnprintf((char*)(bufTx[activeBufTx] + indexTx), DEBUG_TX_BUF_LEN - indexTx - sizeof(__FOOTER) + 1, FORMAT, args);
+        indexTx += __len;
         va_end(args);
       }
-      __debug_copyFrom(__FOOTER, sizeof(__FOOTER));
+      __debug_copyFrom(__FOOTER, sizeof(__FOOTER) - 1);
       xTaskNotifyGive(hTaskTx);
       xSemaphoreGive(mutexTx);
     }

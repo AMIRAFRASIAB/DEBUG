@@ -12,10 +12,10 @@
 
 
 /* Default RAM usage */
-#define DEBUG_TX_BUF_LEN        128
+#define DEBUG_TX_BUF_LEN        64
 #define DEBUG_RX_PACKET_LEN_MAX 32
 /* Task options */
-#define DEBUG_TX_TASK_PRIORITY  0
+#define DEBUG_TX_TASK_PRIORITY  1
 #define DEBUG_RX_TASK_PRIORITY  1
 #define DEBUG_TX_STACK_SIZE     128
 #define DEBUG_RX_STACK_SIZE     128
@@ -23,8 +23,8 @@
 #define DEBUG_DMA_IRQ_PRIORITY  6
 #define DEBUG_UART_IRQ_PRIORITY 6
 /* IRQ Definitions */
-#define DEBUG_UART_IRQHandler   UART4_IRQHandler
-#define DEBUG_DMA_IRQHandler    DMA1_Stream4_IRQHandler
+#define DEBUG_UART_IRQHandler   USART1_IRQHandler
+#define DEBUG_DMA_IRQHandler    DMA2_Stream7_IRQHandler
 
 
 
