@@ -106,10 +106,6 @@ __STATIC_INLINE void drv_hw_dma_clear_tc_flag (void) {
   LL_DMA_ClearFlag_TC7(DMA2);
 }
 //-----------------------------------------------------------------------
-__STATIC_INLINE uint32_t drv_hw_dma_isStreamEnabled (void) {
-  return LL_DMA_IsEnabledStream(DMA2, LL_DMA_STREAM_7);
-}
-//-----------------------------------------------------------------------
 __STATIC_INLINE uint32_t drv_hw_uart_get_rxne_flag (void) {
   return LL_USART_IsActiveFlag_RXNE(USART1);
 }
