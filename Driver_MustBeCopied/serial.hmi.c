@@ -47,7 +47,6 @@ void hmi_decoder (void* stream, uint16_t streamLen) {
   uint8_t matchCounter = 0;
   char* input = (char*)stream;
   uint8_t len;
-	input[streamLen - 1] = '\0';
   for (uint32_t i = 0; i < sizeof(LIST) / sizeof(*LIST); i++) {
 		len = strlen(LIST[i].CMD);
     if (!strncmp(LIST[i].CMD, input, strlen(LIST[i].CMD))) {

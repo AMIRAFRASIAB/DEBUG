@@ -18,14 +18,15 @@
 #include "task.h"
 #include "stream_buffer.h"
 
+//------------------------------------------------------------------------
 __STATIC_INLINE BaseType_t __xPortIsInsideInterrupt (void) {
   return (__get_IPSR() == 0)? pdFALSE : pdTRUE;
 }
-
+//------------------------------------------------------------------------
 DebugConfig_t debugConf = {
   .level = 0,
 };
-
+//------------------------------------------------------------------------
 #define ms1             (12 - 1)
 #define ms10            (11 - 1)
 #define ms100           (10 - 1)
@@ -35,53 +36,38 @@ DebugConfig_t debugConf = {
 #define M10             (4  - 1)
 #define H1              (2  - 1)
 #define H10             (1  - 1)
-
-static const uint8_t  __FOOTER[]           = "\n"     ;
-static const uint8_t  __TRACE_LABEL[]      = "<TRC> " ;
-static const uint8_t  __INFO_LABEL[]       = "<INF> " ;
-static const uint8_t  __WARNING_LABEL[]    = "<WRN> " ;
-static const uint8_t  __ERROR_LABEL[]      = "<ERR> " ;
-static const uint8_t  __FATAL_LABEL[]      = "<FTL> " ;
-static const uint8_t* LOG_LEVEL_STRING[] = {__TRACE_LABEL, __INFO_LABEL, __WARNING_LABEL, __ERROR_LABEL, __FATAL_LABEL};
-static       uint8_t  bufTx[2][DEBUG_TX_BUF_LEN] = {0};
 //------------------------------------------------------------------------
-static uint32_t              indexTx     = 0;
+typedef struct {
+  uint32_t           index[2];
+  SemaphoreHandle_t  mutex;
+  uint8_t            buf[2][DEBUG_TX_TOTAL_RAM / 2];
+  uint8_t            active;
+} Tx_s;
+//------------------------------------------------------------------------
+static const uint8_t  __FOOTER[]          = "\n"     ;
+static const uint8_t  __TRACE_LABEL[]     = "<TRC> " ;
+static const uint8_t  __INFO_LABEL[]      = "<INF> " ;
+static const uint8_t  __WARNING_LABEL[]   = "<WRN> " ;
+static const uint8_t  __ERROR_LABEL[]     = "<ERR> " ;
+static const uint8_t  __FATAL_LABEL[]     = "<FTL> " ;
+static const uint8_t* LOG_LEVEL_STRING[]  = {__TRACE_LABEL, __INFO_LABEL, __WARNING_LABEL, __ERROR_LABEL, __FATAL_LABEL};
+//------------------------------------------------------------------------
 static char                  ts[]        = "00:00:00:000 ";
 static TimerHandle_t         hTsTimer    = NULL; 
 static QueueHandle_t         tsMailBox   = NULL;
-static TaskHandle_t          hTaskTx     = NULL;
 static TaskHandle_t          hTaskRx     = NULL;
-static SemaphoreHandle_t     mutexTx     = NULL;
 static StreamBufferHandle_t  streamRx    = NULL;
-static uint8_t               activeBufTx = 0;
+static Tx_s                  tx          = {0};
 //------------------------------------------------------------------------
 static uint32_t __debug_getTimeStamp (void* pvDstBuf, uint32_t dstSizeInByte);
 static void vTimerCallback (TimerHandle_t xTimer);
-static void serviceDebugTx (void* const pvParameters);
 static void serviceDebugRx (void* const pvParameters);
 //------------------------------------------------------------------------
-static bool __debug_dma_trig (void) {
-  if (drv_hw_dma_get_ndtr() == 0 && indexTx > 0) {
-    drv_hw_dma_disable();
-    drv_hw_dma_set_memory_address((uint32_t)bufTx[activeBufTx]);
-    activeBufTx = !activeBufTx;
-    drv_hw_dma_set_ndtr(indexTx);
-    indexTx = 0;
-    drv_hw_dma_enable();
-    return true;
-  }
-  return false;
-}
-//------------------------------------------------------------------------
-static void __debug_copyFrom (const void* DATA, uint16_t len) {
-  if (len + indexTx <= DEBUG_TX_BUF_LEN) {
-    memcpy(bufTx[activeBufTx] + indexTx, DATA, len);
-    indexTx += len;
-  }
-//  else if(__debug_dma_trig() == true) {
-//    memcpy(bufTx[activeBufTx] + indexTx, DATA, len);
-//    indexTx += len;
-//  }
+void __debug_copyFrom (const void* DATA, uint32_t len) {
+  uint32_t freeSpace = (DEBUG_TX_TOTAL_RAM / 2) - tx.index[tx.active];
+  len = (freeSpace >= len)? len : freeSpace;
+  memcpy(tx.buf[tx.active] + tx.index[tx.active], DATA, len);
+  tx.index[tx.active] += len;
 }
 //------------------------------------------------------------------------
 static void vTimerCallback (TimerHandle_t xTimer) {
@@ -138,20 +124,25 @@ static uint32_t __debug_getTimeStamp (void* pvDstBuf, uint32_t dstSizeInByte) {
   return sizeof(ts) - 1;
 }
 //------------------------------------------------------------------------
-static void serviceDebugTx (void* const pvParameters) {
-  while (1) {
-    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
-    __debug_dma_trig();
-    portENTER_CRITICAL();
-    if (!drv_hw_dma_isStreamEnabled() && drv_hw_dma_get_ndtr() != 0) {
-      drv_hw_dma_enable();
+static bool __debug_dma_trig_and_swap (void) {
+  bool trigged = false;
+  if (drv_hw_dma_get_ndtr() == 0) {
+    drv_hw_dma_disable();  
+    drv_hw_dma_clearErrorFlags();
+    if (drv_hw_dma_get_tc_flag()) {
+      drv_hw_dma_clear_tc_flag();
     }
-    portEXIT_CRITICAL();
+    drv_hw_dma_set_memory_address((uint32_t)tx.buf[tx.active]);
+    drv_hw_dma_set_ndtr(tx.index[tx.active]);
+    tx.active ^= 1;
+    tx.index[tx.active] = 0;
+    drv_hw_dma_enable();
   }
+  return trigged;
 }
 //------------------------------------------------------------------------
 static void serviceDebugRx(void* const pvParameters) {
-  uint8_t rxBuf[DEBUG_RX_PACKET_LEN_MAX];
+  uint8_t rxBuf[DEBUG_RX_TOTAL_RAM];
   uint16_t cnt = 0;
   bool headerFlag = false;
   while (1) {
@@ -161,6 +152,7 @@ static void serviceDebugRx(void* const pvParameters) {
         /* Packet complete */
         if (cnt > 0) {
           /* Handle the packet here */
+          rxBuf[cnt % DEBUG_RX_TOTAL_RAM] = '\0';
           hmi_decoder(rxBuf, cnt);
         }
         cnt = 0;
@@ -197,8 +189,6 @@ void DEBUG_DMA_IRQHandler (void) {
   drv_hw_dma_clearErrorFlags();
   if (drv_hw_dma_get_tc_flag()) {
     drv_hw_dma_clear_tc_flag();
-    drv_hw_dma_disable();
-    vTaskNotifyGiveFromISR(hTaskTx, &xHigherPriorityTaskWoken);
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
   }
 }
@@ -209,22 +199,26 @@ bool debug_init (void) {
   status = status && (hTsTimer = xTimerCreate("Timestamp Timer", pdMS_TO_TICKS(1), pdTRUE, NULL, &vTimerCallback)) != 0;
   status = status && (xQueueSend(tsMailBox, ts, 0)) == pdPASS;
   status = status && (xTimerStart(hTsTimer, 0)) == pdPASS;
-  status = status && (mutexTx = xSemaphoreCreateMutex()) != NULL;
-  status = status && (streamRx = xStreamBufferCreate(DEBUG_RX_PACKET_LEN_MAX, 1)) != NULL;
+  status = status && (tx.mutex = xSemaphoreCreateMutex()) != NULL;
+  status = status && (streamRx = xStreamBufferCreate(DEBUG_RX_TOTAL_RAM, 1)) != NULL;
   status = status && drv_hw_driver_init();
-  status = status && xTaskCreate(&serviceDebugTx, "DBG_TX",   DEBUG_TX_STACK_SIZE,   NULL, DEBUG_TX_TASK_PRIORITY,   &hTaskTx)   == pdTRUE;
-  status = status && xTaskCreate(&serviceDebugRx, "DBG_RX",   DEBUG_RX_STACK_SIZE,   NULL, DEBUG_RX_TASK_PRIORITY,   &hTaskRx)   == pdTRUE;
+  status = status && xTaskCreate(&serviceDebugRx, "DBG_RX",   DEBUG_RX_STACK_SIZE,   NULL, DEBUG_RX_TASK_PRIORITY,   &hTaskRx)  == pdTRUE;
+  if (status == true) {
+    LOG_TRACE("Serial debugger engine initialized successfully");
+  }
   return status;
 }
 //------------------------------------------------------------------------
-uint32_t debug_transmit (uint8_t level, uint8_t argLen, const char* FORMAT, ...) {
-  uint32_t result = 0;
+bool debug_transmit (uint8_t level, uint8_t argLen, const char* FORMAT, ...) {
+  uint32_t freeSpace;
+  uint32_t __len;
+  bool result = 0;
   if (debugConf.level > level) {
     return result;
   }
   if (__xPortIsInsideInterrupt() == pdTRUE) {
     /* Handler mode */
-    if (xSemaphoreTakeFromISR(mutexTx, NULL) == pdTRUE) {
+    if (xSemaphoreTakeFromISR(tx.mutex, NULL) == pdTRUE) {
       __debug_copyFrom(LOG_LEVEL_STRING[level], sizeof(__TRACE_LABEL) - 1);
       xQueuePeekFromISR(tsMailBox, ts);
       __debug_copyFrom(ts, sizeof(ts) - 1);
@@ -234,18 +228,28 @@ uint32_t debug_transmit (uint8_t level, uint8_t argLen, const char* FORMAT, ...)
       else {
         va_list args;
         va_start(args, FORMAT);
-        uint32_t __len = vsnprintf((char*)(bufTx[activeBufTx] + indexTx), DEBUG_TX_BUF_LEN - indexTx - sizeof(__FOOTER) + 1, FORMAT, args);
-        indexTx += __len;
+        freeSpace = (DEBUG_TX_TOTAL_RAM / 2) - tx.index[tx.active];
+        __len = vsnprintf((char*)(tx.buf[tx.active] + tx.index[tx.active]), freeSpace, FORMAT, args);
+        tx.index[tx.active] += (freeSpace > __len)? __len : freeSpace;
         va_end(args);
       }
-      __debug_copyFrom(__FOOTER, sizeof(__FOOTER) - 1);
-      vTaskNotifyGiveFromISR(hTaskTx, NULL);
-      xSemaphoreGiveFromISR(mutexTx, NULL);
+      freeSpace = (DEBUG_TX_TOTAL_RAM / 2) - tx.index[tx.active];
+      if (freeSpace >= sizeof(__FOOTER) - 1) {
+        memcpy(tx.buf[tx.active] + tx.index[tx.active], __FOOTER, sizeof(__FOOTER) - 1);
+        tx.index[tx.active] += (sizeof(__FOOTER) - 1);
+      }
+      else {
+        memcpy(tx.buf[tx.active] + (DEBUG_TX_TOTAL_RAM / 2) - (sizeof(__FOOTER) - 1), __FOOTER, sizeof(__FOOTER) - 1);
+        tx.index[tx.active] = (DEBUG_TX_TOTAL_RAM / 2);
+      }
+      __debug_dma_trig_and_swap();
+      result = true;
+      xSemaphoreGiveFromISR(tx.mutex, NULL);
     }
   }
   else {
     /* Thread mode  */
-    if (xSemaphoreTake(mutexTx, pdMS_TO_TICKS(0)) == pdTRUE) {
+    if (xSemaphoreTake(tx.mutex, pdMS_TO_TICKS(0)) == pdTRUE) {
       __debug_copyFrom(LOG_LEVEL_STRING[level], sizeof(__TRACE_LABEL) - 1);
       xQueuePeek(tsMailBox, ts, 0);
       __debug_copyFrom(ts, sizeof(ts) - 1);
@@ -255,13 +259,23 @@ uint32_t debug_transmit (uint8_t level, uint8_t argLen, const char* FORMAT, ...)
       else {
         va_list args;
         va_start(args, FORMAT);
-        uint32_t __len = vsnprintf((char*)(bufTx[activeBufTx] + indexTx), DEBUG_TX_BUF_LEN - indexTx - sizeof(__FOOTER) + 1, FORMAT, args);
-        indexTx += __len;
+        freeSpace = (DEBUG_TX_TOTAL_RAM / 2) - tx.index[tx.active];
+        __len = vsnprintf((char*)(tx.buf[tx.active] + tx.index[tx.active]), freeSpace, FORMAT, args);
+        tx.index[tx.active] += (freeSpace > __len)? __len : freeSpace;
         va_end(args);
       }
-      __debug_copyFrom(__FOOTER, sizeof(__FOOTER) - 1);
-      xTaskNotifyGive(hTaskTx);
-      xSemaphoreGive(mutexTx);
+      freeSpace = (DEBUG_TX_TOTAL_RAM / 2) - tx.index[tx.active];
+      if (freeSpace >= sizeof(__FOOTER) - 1) {
+        memcpy(tx.buf[tx.active] + tx.index[tx.active], __FOOTER, sizeof(__FOOTER) - 1);
+        tx.index[tx.active] += (sizeof(__FOOTER) - 1);
+      }
+      else {
+        memcpy(tx.buf[tx.active] + (DEBUG_TX_TOTAL_RAM / 2) - (sizeof(__FOOTER) - 1), __FOOTER, sizeof(__FOOTER) - 1);
+        tx.index[tx.active] = (DEBUG_TX_TOTAL_RAM / 2);
+      }
+      __debug_dma_trig_and_swap();
+      result = true;
+      xSemaphoreGive(tx.mutex);
     }
   }
   return result;

@@ -10,14 +10,13 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-
+/* DEBUG baud rate */
+#define DEBUG_BAUD_RATE         115200
 /* Default RAM usage */
-#define DEBUG_TX_BUF_LEN        64
-#define DEBUG_RX_PACKET_LEN_MAX 32
+#define DEBUG_TX_TOTAL_RAM      512
+#define DEBUG_RX_TOTAL_RAM      32
 /* Task options */
-#define DEBUG_TX_TASK_PRIORITY  1
 #define DEBUG_RX_TASK_PRIORITY  1
-#define DEBUG_TX_STACK_SIZE     128
 #define DEBUG_RX_STACK_SIZE     128
 /* IRQ Priorities */
 #define DEBUG_DMA_IRQ_PRIORITY  6
