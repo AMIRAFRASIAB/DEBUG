@@ -13,11 +13,11 @@
 /* DEBUG baud rate */
 #define DEBUG_BAUD_RATE         115200
 /* Default RAM usage */
-#define DEBUG_TX_TOTAL_RAM      512
-#define DEBUG_RX_TOTAL_RAM      32
+#define DEBUG_TX_TOTAL_RAM      256         // in bytes
+#define DEBUG_RX_TOTAL_RAM      32          // in bytes
 /* Task options */
 #define DEBUG_RX_TASK_PRIORITY  1
-#define DEBUG_RX_STACK_SIZE     128
+#define DEBUG_RX_STACK_SIZE     512         // in bytes
 /* IRQ Priorities */
 #define DEBUG_DMA_IRQ_PRIORITY  6
 #define DEBUG_UART_IRQ_PRIORITY 6

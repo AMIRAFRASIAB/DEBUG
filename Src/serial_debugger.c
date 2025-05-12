@@ -202,7 +202,7 @@ bool debug_init (void) {
   status = status && (tx.mutex = xSemaphoreCreateMutex()) != NULL;
   status = status && (streamRx = xStreamBufferCreate(DEBUG_RX_TOTAL_RAM, 1)) != NULL;
   status = status && drv_hw_driver_init();
-  status = status && xTaskCreate(&serviceDebugRx, "DBG_RX",   DEBUG_RX_STACK_SIZE,   NULL, DEBUG_RX_TASK_PRIORITY,   &hTaskRx)  == pdTRUE;
+  status = status && xTaskCreate(&serviceDebugRx, "DBG_RX",   DEBUG_RX_STACK_SIZE / 4,   NULL, DEBUG_RX_TASK_PRIORITY,   &hTaskRx)  == pdTRUE;
   if (status == true) {
     LOG_TRACE("Serial debugger engine initialized successfully");
   }
