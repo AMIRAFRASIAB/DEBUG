@@ -18,10 +18,7 @@
 #include "task.h"
 #include "stream_buffer.h"
 
-//------------------------------------------------------------------------
-__STATIC_INLINE BaseType_t __xPortIsInsideInterrupt (void) {
-  return (__get_IPSR() == 0)? pdFALSE : pdTRUE;
-}
+
 //------------------------------------------------------------------------
 DebugConfig_t debugConf = {
   .level = 0,
@@ -59,10 +56,33 @@ static TaskHandle_t          hTaskRx     = NULL;
 static StreamBufferHandle_t  streamRx    = NULL;
 static Tx_s                  tx          = {0};
 //------------------------------------------------------------------------
-static uint32_t __debug_getTimeStamp (void* pvDstBuf, uint32_t dstSizeInByte);
 static void vTimerCallback (TimerHandle_t xTimer);
 static void serviceDebugRx (void* const pvParameters);
 //------------------------------------------------------------------------
+/**
+ * @brief Checks if the current execution context is inside an interrupt.
+ *
+ * This inline function checks the `IPSR` register to determine whether the code
+ * is executing in an interrupt context. If `IPSR` is non-zero, it indicates an interrupt.
+ *
+ * @return pdTRUE if inside an interrupt, pdFALSE if in thread (main) context.
+ */
+__STATIC_INLINE BaseType_t __xPortIsInsideInterrupt (void) {
+  return (__get_IPSR() == 0)? pdFALSE : pdTRUE;
+}
+//------------------------------------------------------------------------
+/**
+ * @brief Copies data into the debug transmission buffer.
+ *
+ * This function copies `len` bytes of data into the active transmission buffer
+ * (`tx.buf[tx.active]`) at the current position (`tx.index[tx.active]`).
+ * It ensures that the copy operation does not exceed the remaining available space
+ * in the buffer. The buffer index is updated after the copy.
+ *
+ * @param DATA Pointer to the data to be copied into the buffer.
+ * @param len  Number of bytes to copy. The actual number of bytes copied may be
+ *             less if there is not enough free space in the buffer.
+ */
 void __debug_copyFrom (const void* DATA, uint32_t len) {
   uint32_t freeSpace = (DEBUG_TX_TOTAL_RAM / 2) - tx.index[tx.active];
   len = (freeSpace >= len)? len : freeSpace;
@@ -70,6 +90,23 @@ void __debug_copyFrom (const void* DATA, uint32_t len) {
   tx.index[tx.active] += len;
 }
 //------------------------------------------------------------------------
+/**
+ * @brief Callback function to update the timestamp on each timer tick.
+ *
+ * This function increments the timestamp value stored in the `ts` array,
+ * which tracks time in a format resembling `HH:MM:SS:ms100:ms10:ms1`.
+ * The function updates the timestamp and rolls over each component as necessary:
+ * - ms1 (milliseconds)
+ * - ms10 (tens of milliseconds)
+ * - ms100 (hundreds of milliseconds)
+ * - S1, S10 (seconds)
+ * - M1, M10 (minutes)
+ * - H1, H10 (hours)
+ *
+ * After updating the timestamp, the new value is written to the `tsMailBox` queue.
+ *
+ * @param xTimer The timer handle (not used in the current implementation).
+ */
 static void vTimerCallback (TimerHandle_t xTimer) {
   ts[ms1]++;
   if (ts[ms1] == ':') {
@@ -111,19 +148,18 @@ static void vTimerCallback (TimerHandle_t xTimer) {
   xQueueOverwrite(tsMailBox, ts);
 }
 //------------------------------------------------------------------------
-static uint32_t __debug_getTimeStamp (void* pvDstBuf, uint32_t dstSizeInByte) {
-  if (dstSizeInByte < sizeof(ts)) {
-    return 0;
-  }
-  if (xPortIsInsideInterrupt() == pdTRUE) {
-    xQueuePeekFromISR(tsMailBox, pvDstBuf);
-  }
-  else {
-    xQueuePeek(tsMailBox, pvDstBuf, 0);
-  }
-  return sizeof(ts) - 1;
-}
-//------------------------------------------------------------------------
+/**
+ * @brief Triggers the DMA transfer for debug transmission if idle, and swaps the active buffer.
+ *
+ * This function checks if the debug DMA is idle (NDTR == 0), then:
+ * - Disables the DMA,
+ * - Clears any pending error or transfer complete flags,
+ * - Sets the memory address and transfer size from the active buffer,
+ * - Swaps to the next buffer and resets its index,
+ * - Re-enables the DMA to start transmission.
+ *
+ * @return true if a DMA transfer was triggered, false if DMA was still busy.
+ */
 static bool __debug_dma_trig_and_swap (void) {
   bool trigged = false;
   if (drv_hw_dma_get_ndtr() == 0) {
@@ -136,11 +172,24 @@ static bool __debug_dma_trig_and_swap (void) {
     drv_hw_dma_set_ndtr(tx.index[tx.active]);
     tx.active ^= 1;
     tx.index[tx.active] = 0;
+    trigged = true;
     drv_hw_dma_enable();
   }
   return trigged;
 }
 //------------------------------------------------------------------------
+/**
+ * @brief Task that processes incoming debug UART data from the stream buffer.
+ *
+ * This task waits for incoming bytes from the debug UART stream buffer.
+ * It detects packets that start and end with a carriage return (`\r`),
+ * and passes complete packets to the `hmi_decoder()` for processing.
+ *
+ * It also includes protection against buffer overflows by resetting
+ * the packet assembly state if the buffer limit is reached.
+ *
+ * @param pvParameters Unused task parameter (can be NULL).
+ */
 static void serviceDebugRx(void* const pvParameters) {
   uint8_t rxBuf[DEBUG_RX_TOTAL_RAM];
   uint16_t cnt = 0;
@@ -176,6 +225,15 @@ static void serviceDebugRx(void* const pvParameters) {
   /* Never reaches here */
 }
 //------------------------------------------------------------------------
+/**
+ * @brief UART interrupt handler for receiving debug data.
+ *
+ * This ISR handles the RXNE (Receive Not Empty) interrupt for the debug UART.
+ * When a byte is received, it is read from the UART data register and pushed
+ * into the debug receive stream buffer.
+ *
+ * @note This function should be linked to the UART IRQ used for the debug interface (e.g., USART2).
+ */
 void DEBUG_UART_IRQHandler (void) {
   if (drv_hw_uart_get_rxne_flag() != 0) {
     drv_hw_uart_clear_rxne_flag();
@@ -184,6 +242,15 @@ void DEBUG_UART_IRQHandler (void) {
   }
 }
 //------------------------------------------------------------------------
+/**
+ * @brief DMA interrupt handler for the debug transmit channel.
+ *
+ * This ISR clears DMA error and transfer complete flags related to the debug
+ * interface. If a transfer complete (TC) event is detected, it requests a
+ * context switch if needed.
+ *
+ * @note This function should be linked to the actual DMA IRQ used for debug transmission.
+ */
 void DEBUG_DMA_IRQHandler (void) {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
   drv_hw_dma_clearErrorFlags();
@@ -193,6 +260,21 @@ void DEBUG_DMA_IRQHandler (void) {
   }
 }
 //------------------------------------------------------------------------
+/**
+ * @brief Initializes the debug system.
+ *
+ * Sets up all required components for the debug interface, including:
+ * - Timestamp queue and timer
+ * - Debug transmission mutex
+ * - Receive stream buffer
+ * - Hardware driver
+ * - Debug RX service task
+ *
+ * This function must be called before using any debug transmission functions
+ * like @ref debug_transmit().
+ *
+ * @return true if all components were initialized successfully, false otherwise.
+ */
 bool debug_init (void) {
   bool status = true;
   status = status && (tsMailBox = xQueueCreate(1, sizeof(ts))) != 0;
@@ -209,6 +291,22 @@ bool debug_init (void) {
   return status;
 }
 //------------------------------------------------------------------------
+/**
+ * @brief Sends a formatted debug message over the debug interface.
+ *
+ * This function acts like `printf`. It formats and queues a debug message
+ * based on the specified log level and arguments. Messages below the configured
+ * debug level are ignored.
+ *
+ * It works in both thread and interrupt context, using the appropriate FreeRTOS APIs.
+ *
+ * @param level   Debug message level (e.g., info, warning, error).
+ * @param argLen  Number of arguments after FORMAT (1 means plain string).
+ * @param FORMAT  `printf`-style format string or plain message.
+ * @param ...     Optional arguments matching the FORMAT string.
+ *
+ * @return true if the message was accepted for transmission, false otherwise.
+ */
 bool debug_transmit (uint8_t level, uint8_t argLen, const char* FORMAT, ...) {
   uint32_t freeSpace;
   uint32_t __len;
