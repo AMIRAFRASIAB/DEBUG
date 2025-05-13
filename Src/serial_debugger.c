@@ -212,6 +212,7 @@ bool debug_init (void) {
 bool debug_transmit (uint8_t level, uint8_t argLen, const char* FORMAT, ...) {
   uint32_t freeSpace;
   uint32_t __len;
+  char timeStamp[sizeof(ts)];
   bool result = 0;
   if (debugConf.level > level) {
     return result;
@@ -220,12 +221,12 @@ bool debug_transmit (uint8_t level, uint8_t argLen, const char* FORMAT, ...) {
     /* Handler mode */
     if (xSemaphoreTakeFromISR(tx.mutex, NULL) == pdTRUE) {
       __debug_copyFrom(LOG_LEVEL_STRING[level], sizeof(__TRACE_LABEL) - 1);
-      xQueuePeekFromISR(tsMailBox, ts);
-      __debug_copyFrom(ts, sizeof(ts) - 1);
+      xQueuePeekFromISR(tsMailBox, timeStamp);
+      __debug_copyFrom(timeStamp, sizeof(ts) - 1);
       if (argLen == 1) {
         __debug_copyFrom((uint8_t*)FORMAT, strlen(FORMAT));
       }
-      else {
+      else { 
         va_list args;
         va_start(args, FORMAT);
         freeSpace = (DEBUG_TX_TOTAL_RAM / 2) - tx.index[tx.active];
@@ -251,8 +252,8 @@ bool debug_transmit (uint8_t level, uint8_t argLen, const char* FORMAT, ...) {
     /* Thread mode  */
     if (xSemaphoreTake(tx.mutex, pdMS_TO_TICKS(0)) == pdTRUE) {
       __debug_copyFrom(LOG_LEVEL_STRING[level], sizeof(__TRACE_LABEL) - 1);
-      xQueuePeek(tsMailBox, ts, 0);
-      __debug_copyFrom(ts, sizeof(ts) - 1);
+      xQueuePeek(tsMailBox, timeStamp, 0);
+      __debug_copyFrom(timeStamp, sizeof(ts) - 1);
       if (argLen == 1) {
         __debug_copyFrom((uint8_t*)FORMAT, strlen(FORMAT));
       }

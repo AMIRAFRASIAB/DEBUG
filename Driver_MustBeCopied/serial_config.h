@@ -11,9 +11,9 @@
 #include <stdbool.h>
 
 /* DEBUG baud rate */
-#define DEBUG_BAUD_RATE         115200
+#define DEBUG_BAUD_RATE         230400
 /* Default RAM usage */
-#define DEBUG_TX_TOTAL_RAM      256         // in bytes
+#define DEBUG_TX_TOTAL_RAM      4096        // in bytes
 #define DEBUG_RX_TOTAL_RAM      32          // in bytes
 /* Task options */
 #define DEBUG_RX_TASK_PRIORITY  1
