@@ -43,7 +43,7 @@ static void __hmi_update_tokens (const char* ARGS, uint8_t strLen) {
   }
   argc = 0;
   char* args = (void*)ARGS;
-  args[strLen - 1] = '\0';
+//  args[strLen - 1] = '\0';
   char* tok = strtok(args," ");
   while (tok != NULL) {
     argv[argc++] = tok;
