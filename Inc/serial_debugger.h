@@ -21,11 +21,9 @@ extern DebugConfig_t debugConf;
 /* Public APIs */
 bool debug_init (void);
 bool debug_transmit (uint8_t level, uint8_t argLen, const char* FORMAT, ...);
+void debug_getTimestamp14 (uint8_t* dst);
 //--------------------------------------------------------------------------------------
 /* Helper macros */
-#define __COUNT(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, N, ...)\
-                                    N 
-#define COUNT(...)                  __COUNT(__VA_ARGS__ ,20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1)
 #define __LOG(level, argLen, ...)   debug_transmit (level, argLen, __VA_ARGS__)
 //--------------------------------------------------------------------------------------
 /* Main interface */

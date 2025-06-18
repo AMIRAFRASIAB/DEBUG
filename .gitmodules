@@ -1,0 +1,3 @@
+[submodule "Sub_Modules/SWO"]
+	path = Sub_Modules/SWO
+	url = https://github.com/AMIRAFRASIAB/SWO.git

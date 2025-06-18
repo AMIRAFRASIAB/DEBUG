@@ -1,10 +1,12 @@
 
-#include "stdint.h"
-#include "cmsis_armclang.h"
+/* وَ نُرِیدُ أَنْ نَمُنَّ عَلَی الَّذِینَ اسْتُضْعِفُوا فِی الْأَرْضِ وَ نَجْعَلَهُمْ أَئِمَّةً وَ نَجْعَلَهُمُ الْوارِثِینَ */
+
 #include "serial_debugger.h"
 #include "serial_config.h"
 #include "serial_driver.h"
 #include "serial_hmi.h"
+#include "swo.h"
+
 #include "stdint.h"
 #include "stdbool.h"
 #include  "string.h"
@@ -12,10 +14,10 @@
 #include "stdio.h"
 
 #include "FreeRTOS.h"
+#include "task.h"
 #include "timers.h"
 #include "semphr.h"
 #include "queue.h"
-#include "task.h"
 #include "stream_buffer.h"
 
 
@@ -58,18 +60,6 @@ static Tx_s                  tx          = {0};
 //------------------------------------------------------------------------
 static void vTimerCallback (TimerHandle_t xTimer);
 static void serviceDebugRx (void* const pvParameters);
-//------------------------------------------------------------------------
-/**
- * @brief Checks if the current execution context is inside an interrupt.
- *
- * This inline function checks the `IPSR` register to determine whether the code
- * is executing in an interrupt context. If `IPSR` is non-zero, it indicates an interrupt.
- *
- * @return pdTRUE if inside an interrupt, pdFALSE if in thread (main) context.
- */
-__STATIC_INLINE BaseType_t __xPortIsInsideInterrupt (void) {
-  return (__get_IPSR() == 0)? pdFALSE : pdTRUE;
-}
 //------------------------------------------------------------------------
 /**
  * @brief Copies data into the debug transmission buffer.
@@ -291,6 +281,39 @@ bool debug_init (void) {
   return status;
 }
 //------------------------------------------------------------------------
+static BaseType_t __debug_xSemaphoreTakeFromTask (SemaphoreHandle_t obj) {
+  return xSemaphoreTake(obj, 0);
+}
+static BaseType_t __debug_xSemaphoreTakeFromISR (SemaphoreHandle_t obj) {
+  return xSemaphoreTakeFromISR(obj, NULL);
+}
+static BaseType_t (* const semaphoreTake_Fn[2]) (SemaphoreHandle_t) = {
+  __debug_xSemaphoreTakeFromTask,
+  __debug_xSemaphoreTakeFromISR,
+};
+//------------------------------------------------------------------------
+static void __debug_getTimestampFromTask (uint8_t* buf) {
+  xQueuePeek(tsMailBox, buf, 0);
+}
+static void __debug_getTimestampFromISR (uint8_t* buf) {
+  xQueuePeekFromISR(tsMailBox, buf);
+}
+static void (* const getTimestamp_Fn[2]) (uint8_t*) = {
+  __debug_getTimestampFromTask,
+  __debug_getTimestampFromISR,
+};
+//------------------------------------------------------------------------
+static void __debug_xSemaphoreGiveFromTask (SemaphoreHandle_t obj) {
+  xSemaphoreGive(obj);
+}
+static void __debug_xSemaphoreGiveFromISR (SemaphoreHandle_t obj) {
+  xSemaphoreGiveFromISR(obj, NULL);
+}
+static void (* const semaphoreGive_Fn[2]) (SemaphoreHandle_t) = {
+  __debug_xSemaphoreGiveFromTask,
+  __debug_xSemaphoreGiveFromISR,
+};
+//------------------------------------------------------------------------
 /**
  * @brief Sends a formatted debug message over the debug interface.
  *
@@ -310,73 +333,48 @@ bool debug_init (void) {
 bool debug_transmit (uint8_t level, uint8_t argLen, const char* FORMAT, ...) {
   uint32_t freeSpace;
   uint32_t __len;
-  char timeStamp[sizeof(ts)];
+  uint8_t timestamp[sizeof(ts)];
   bool result = 0;
   if (debugConf.level > level) {
     return result;
   }
-  if (__xPortIsInsideInterrupt() == pdTRUE) {
-    /* Handler mode */
-    if (xSemaphoreTakeFromISR(tx.mutex, NULL) == pdTRUE) {
-      __debug_copyFrom(LOG_LEVEL_STRING[level], sizeof(__TRACE_LABEL) - 1);
-      xQueuePeekFromISR(tsMailBox, timeStamp);
-      __debug_copyFrom(timeStamp, sizeof(ts) - 1);
-      if (argLen == 1) {
-        __debug_copyFrom((uint8_t*)FORMAT, strlen(FORMAT));
-      }
-      else { 
-        va_list args;
-        va_start(args, FORMAT);
-        freeSpace = (DEBUG_TX_TOTAL_RAM / 2) - tx.index[tx.active];
-        __len = vsnprintf((char*)(tx.buf[tx.active] + tx.index[tx.active]), freeSpace, FORMAT, args);
-        tx.index[tx.active] += (freeSpace > __len)? __len : freeSpace;
-        va_end(args);
-      }
-      freeSpace = (DEBUG_TX_TOTAL_RAM / 2) - tx.index[tx.active];
-      if (freeSpace >= sizeof(__FOOTER) - 1) {
-        memcpy(tx.buf[tx.active] + tx.index[tx.active], __FOOTER, sizeof(__FOOTER) - 1);
-        tx.index[tx.active] += (sizeof(__FOOTER) - 1);
-      }
-      else {
-        memcpy(tx.buf[tx.active] + (DEBUG_TX_TOTAL_RAM / 2) - (sizeof(__FOOTER) - 1), __FOOTER, sizeof(__FOOTER) - 1);
-        tx.index[tx.active] = (DEBUG_TX_TOTAL_RAM / 2);
-      }
-      __debug_dma_trig_and_swap();
-      result = true;
-      xSemaphoreGiveFromISR(tx.mutex, NULL);
+  uint8_t context = IS_INSIDE_INTERRUPT();
+  if (semaphoreTake_Fn[context](tx.mutex) == pdTRUE) {
+    __debug_copyFrom(LOG_LEVEL_STRING[level], sizeof(__TRACE_LABEL) - 1);
+    getTimestamp_Fn[context](timestamp);
+    __debug_copyFrom(timestamp, sizeof(ts) - 1);
+    #if DEBUG_USE_SPRINTF_FORMATTER == YES
+    if (argLen == 1) {
+      __debug_copyFrom((uint8_t*)FORMAT, strlen(FORMAT));
     }
-  }
-  else {
-    /* Thread mode  */
-    if (xSemaphoreTake(tx.mutex, pdMS_TO_TICKS(0)) == pdTRUE) {
-      __debug_copyFrom(LOG_LEVEL_STRING[level], sizeof(__TRACE_LABEL) - 1);
-      xQueuePeek(tsMailBox, timeStamp, 0);
-      __debug_copyFrom(timeStamp, sizeof(ts) - 1);
-      if (argLen == 1) {
-        __debug_copyFrom((uint8_t*)FORMAT, strlen(FORMAT));
-      }
-      else {
-        va_list args;
-        va_start(args, FORMAT);
-        freeSpace = (DEBUG_TX_TOTAL_RAM / 2) - tx.index[tx.active];
-        __len = vsnprintf((char*)(tx.buf[tx.active] + tx.index[tx.active]), freeSpace, FORMAT, args);
-        tx.index[tx.active] += (freeSpace > __len)? __len : freeSpace;
-        va_end(args);
-      }
+    else { 
+      va_list args;
+      va_start(args, FORMAT);
       freeSpace = (DEBUG_TX_TOTAL_RAM / 2) - tx.index[tx.active];
-      if (freeSpace >= sizeof(__FOOTER) - 1) {
-        memcpy(tx.buf[tx.active] + tx.index[tx.active], __FOOTER, sizeof(__FOOTER) - 1);
-        tx.index[tx.active] += (sizeof(__FOOTER) - 1);
-      }
-      else {
-        memcpy(tx.buf[tx.active] + (DEBUG_TX_TOTAL_RAM / 2) - (sizeof(__FOOTER) - 1), __FOOTER, sizeof(__FOOTER) - 1);
-        tx.index[tx.active] = (DEBUG_TX_TOTAL_RAM / 2);
-      }
-      __debug_dma_trig_and_swap();
-      result = true;
-      xSemaphoreGive(tx.mutex);
+      __len = vsnprintf((char*)(tx.buf[tx.active] + tx.index[tx.active]), freeSpace, FORMAT, args);
+      tx.index[tx.active] += (freeSpace > __len)? __len : freeSpace;
+      va_end(args);
     }
+    #else 
+    __debug_copyFrom((uint8_t*)FORMAT, strlen(FORMAT));
+    #endif //DEBUG_USE_SPRINTF_FORMATTER
+    freeSpace = (DEBUG_TX_TOTAL_RAM / 2) - tx.index[tx.active];
+    if (freeSpace >= sizeof(__FOOTER) - 1) {
+      memcpy(tx.buf[tx.active] + tx.index[tx.active], __FOOTER, sizeof(__FOOTER) - 1);
+      tx.index[tx.active] += (sizeof(__FOOTER) - 1);
+    }
+    else {
+      memcpy(tx.buf[tx.active] + (DEBUG_TX_TOTAL_RAM / 2) - (sizeof(__FOOTER) - 1), __FOOTER, sizeof(__FOOTER) - 1);
+      tx.index[tx.active] = (DEBUG_TX_TOTAL_RAM / 2);
+    }
+    __debug_dma_trig_and_swap();
+    result = true;
+    semaphoreGive_Fn[context](tx.mutex);
   }
   return result;
+}
+//------------------------------------------------------------------------
+void debug_getTimestamp14 (uint8_t* dst) {
+  getTimestamp_Fn[IS_INSIDE_INTERRUPT()](dst);
 }
 //------------------------------------------------------------------------
