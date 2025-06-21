@@ -400,3 +400,11 @@ void debug_getTimestamp14 (uint8_t* dst) {
   #endif //debug_USE_TIMESTAMP
 }
 //------------------------------------------------------------------------
+void debug_setTimestamp (uint8_t hh,uint8_t mm, uint8_t ss) {
+  #if debug_USE_TIMESTAMP == YES 
+  vPortEnterCritical();
+  snprintf(ts, sizeof(ts), "%02d:%02d:%02d:000 ", hh % 24, mm % 60, ss % 60);
+  vPortExitCritical();
+  #endif //debug_USE_TIMESTAMP
+}
+//------------------------------------------------------------------------

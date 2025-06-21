@@ -21,6 +21,7 @@ extern DebugConfig_t debugConf;
 bool debug_init (void);
 bool debug_transmit (uint8_t level, uint8_t argLen, const char* FORMAT, ...);
 void debug_getTimestamp14 (uint8_t* dst);
+void debug_setTimestamp (uint8_t hh,uint8_t mm, uint8_t ss);
 //--------------------------------------------------------------------------------------
 /* Helper macros */
 #define __LOG(level, argLen, ...)   debug_transmit (level, argLen, __VA_ARGS__)

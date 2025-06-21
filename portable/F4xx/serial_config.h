@@ -23,10 +23,10 @@
 #define debug_USE_SPRINTF_FORMATTER     YES     
 #define debug_USE_LABLE                 YES     
 #define debug_USE_TIMESTAMP             YES     
-#define debug_TX_TOTAL_RAM              2048     
+#define debug_TX_TOTAL_RAM              512     
 #define debug_RX_ENGINE_ENABLE          YES     
 #if (debug_RX_ENGINE_ENABLE==YES)
-  #define debug_RX_TOTAL_RAM            32      
+  #define debug_RX_TOTAL_RAM            32     
   #define debug_RX_TASK_PRIORITY        1    
   #define debug_RX_STACK_SIZE           512
 #endif
@@ -47,7 +47,7 @@
 /*-----------------------------------------------------------------*/
 /* USART Setting */
 /*-----------------------------------------------------------------*/
-#define debug_BAUD_RATE                 230400                  
+#define debug_BAUD_RATE                 115200                  
 #define debug_USART_CLOCK_DOMIN_Hz      42000000                
 #define debug_USART_TYPE                USART                   
 #define debug_USART_NUM                 2                       
