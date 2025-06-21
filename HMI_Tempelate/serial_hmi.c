@@ -3,6 +3,7 @@
 #include "serial_debugger.h"
 #include "string.h"
 
+#if debug_RX_ENGINE_ENABLE == YES
 //------------------------------------------------------------------------
 typedef void (*vFn) (void);
 typedef struct {
@@ -97,6 +98,11 @@ void hmi_decoder (void* stream, uint16_t streamLen) {
   }
   return;
 }
+#endif //debug_RX_ENGINE_ENABLE
 //------------------------------------------------------------------------
 /* Callback functions implementation */
-void run_CMD1 (void) {}
+void run_CMD1 (void) {
+  LOG_TRACE("Packet received !!!");
+}
+
+

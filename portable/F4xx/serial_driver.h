@@ -17,71 +17,39 @@
 
 #include "serial_debugger.h"
 #include "serial_config.h"
+#include "stm32f4xx_ll_bus.h"
+#include "stm32f4xx_ll_gpio.h"
+#include "stm32f4xx_ll_usart.h"
+#include "stm32f4xx_ll_dma.h"
+#include "stm32f4xx_hal_rcc.h"
 
-
-#include TO_STRING(CONCAT(stm32, DEBUG_STM32_SERIES, xx_ll_bus.h))
-#include TO_STRING(CONCAT(stm32, DEBUG_STM32_SERIES, xx_ll_gpio.h))
-#include TO_STRING(CONCAT(stm32, DEBUG_STM32_SERIES, xx_ll_usart.h))
-#include TO_STRING(CONCAT(stm32, DEBUG_STM32_SERIES, xx_ll_dma.h))
-#include TO_STRING(CONCAT(stm32, DEBUG_STM32_SERIES, xx_hal_rcc.h))
-
-#define __DEBUG_UART_GPIO_TX_CLK_ENABLE()         CONCAT(CONCAT(__HAL_RCC_GPIO, DEBUG_UART_TX_GPIO), _CLK_ENABLE)()
-#define __DEBUG_UART_GPIO_RX_CLK_ENABLE()         CONCAT(CONCAT(__HAL_RCC_GPIO, DEBUG_UART_RX_GPIO), _CLK_ENABLE)()
-#define __DEBUG_DMA_CLK_ENABLE()                  CONCAT(CONCAT(__HAL_RCC_DMA, DEBUG_DMA), _CLK_ENABLE)()
-     
-#define __DEBUG_TX_GPIO                           CONCAT(GPIO, DEBUG_UART_TX_GPIO)
-#define __DEBUG_RX_GPIO                           CONCAT(GPIO, DEBUG_UART_RX_GPIO)
-     
-#define __DEBUG_TX_PIN                            CONCAT(LL_GPIO_PIN_, DEBUG_UART_TX_PIN)
-#define __DEBUG_RX_PIN                            CONCAT(LL_GPIO_PIN_, DEBUG_UART_RX_PIN)
-     
-#define __DEBUG_TX_AF                             CONCAT(LL_GPIO_AF_, DEBUG_UART_TX_AF)
-#define __DEBUG_RX_AF                             CONCAT(LL_GPIO_AF_, DEBUG_UART_RX_AF)
-     
-#define __DEBUG_DMAx                              CONCAT(DMA, DEBUG_DMA)
-
-#if (DEBUG_DMA_USE_STREAM == YES)
-  #define __DEBUG_DMA_LINE                        CONCAT(LL_DMA_STREAM_, DEBUG_DMA_STREAM)
-  #define __DEBUG_DMA_CHANNEL                     CONCAT(LL_DMA_CHANNEL_, DEBUG_DMA_CHANNEL)
-  #define __DEBUG_DMA_DISABLE_LINE()              LL_DMA_DisableStream(__DEBUG_DMAx, __DEBUG_DMA_LINE)
-  #define __DEBUG_DMA_ENABLE_LINE()               LL_DMA_EnableStream(__DEBUG_DMAx, __DEBUG_DMA_LINE)
-  #define __DEBUG_NVIC_IRQn                       CONCAT(DMA, CONCAT(CONCAT(CONCAT(DEBUG_DMA, _Stream), DEBUG_DMA_STREAM), _IRQn))
-  #define __DEBUG_DMA_ClearFlag_DME()             CONCAT(LL_DMA_ClearFlag_DME, DEBUG_DMA_STREAM)(__DEBUG_DMAx)
-  #define __DEBUG_DMA_ClearFlag_FE()              CONCAT(LL_DMA_ClearFlag_FE,  DEBUG_DMA_STREAM)(__DEBUG_DMAx)
-  #define __DEBUG_DMA_ClearFlag_TC()              CONCAT(LL_DMA_ClearFlag_TC,  DEBUG_DMA_STREAM)(__DEBUG_DMAx)
-  #define __DEBUG_DMA_ClearFlag_HT()              CONCAT(LL_DMA_ClearFlag_HT,  DEBUG_DMA_STREAM)(__DEBUG_DMAx)
-  #define __DEBUG_DMA_ClearFlag_TE()              CONCAT(LL_DMA_ClearFlag_TE,  DEBUG_DMA_STREAM)(__DEBUG_DMAx)
-  #define __DEBUG_DMA_SetLinePriorityLevel(...)   LL_DMA_SetStreamPriorityLevel(__VA_ARGS__)
-  #define __DEBUG_DMA_IsActiveFlag_TE()           CONCAT(LL_DMA_IsActiveFlag_TE, DEBUG_DMA_STREAM)(__DEBUG_DMAx)
-  #define __DEBUG_DMA_IsActiveFlag_TC()           CONCAT(LL_DMA_IsActiveFlag_TC, DEBUG_DMA_STREAM)(__DEBUG_DMAx)
-  #define DEBUG_DMA_IRQHandler                    CONCAT(DMA, CONCAT(DEBUG_DMA, _Stream, DEBUG_DMA_STREAM, _IRQHandler))
-#else
-  #define __DEBUG_DMA_LINE                        CONCAT(LL_DMA_CHANNEL_, DEBUG_DMA_CHANNEL)
-  #define __DEBUG_DMA_DISABLE_LINE()              LL_DMA_DisableChannel(__DEBUG_DMAx, __DEBUG_DMA_LINE)
-  #define __DEBUG_DMA_ENABLE_LINE()               LL_DMA_EnableChannel(__DEBUG_DMAx, __DEBUG_DMA_LINE)
-  #define __DEBUG_NVIC_IRQn                       CONCAT(DMA, CONCAT(CONCAT(CONCAT(DEBUG_DMA, _Channel), DEBUG_DMA_CHANNEL), _IRQn))
-  #define __DEBUG_DMA_ClearFlag_DME()             CONCAT(LL_DMA_ClearFlag_DME, DEBUG_DMA_CHANNEL)(__DEBUG_DMAx)
-  #define __DEBUG_DMA_ClearFlag_FE()              CONCAT(LL_DMA_ClearFlag_FE,  DEBUG_DMA_CHANNEL)(__DEBUG_DMAx)
-  #define __DEBUG_DMA_ClearFlag_TC()              CONCAT(LL_DMA_ClearFlag_TC,  DEBUG_DMA_CHANNEL)(__DEBUG_DMAx)
-  #define __DEBUG_DMA_ClearFlag_HT()              CONCAT(LL_DMA_ClearFlag_HT,  DEBUG_DMA_CHANNEL)(__DEBUG_DMAx)
-  #define __DEBUG_DMA_ClearFlag_TE()              CONCAT(LL_DMA_ClearFlag_TE,  DEBUG_DMA_CHANNEL)(__DEBUG_DMAx)
-  #define __DEBUG_DMA_SetLinePriorityLevel(...)   LL_DMA_SetChannelPriorityLevel(__VA_ARGS__)
-  #define __DEBUG_DMA_IsActiveFlag_TE()           CONCAT(LL_DMA_IsActiveFlag_TE, DEBUG_DMA_CHANNEL)(__DEBUG_DMAx)
-  #define __DEBUG_DMA_IsActiveFlag_TC()           CONCAT(LL_DMA_IsActiveFlag_TC, DEBUG_DMA_CHANNEL)(__DEBUG_DMAx)
-  #define DEBUG_DMA_IRQHandler                    CONCAT(DMA, CONCAT(DEBUG_DMA, _Stream, DEBUG_DMA_CHANNEL, _IRQHandler)
-#endif //(DEBUG_DMA_USE_STREAM == YES)
-
-#define DEBUG_UART_IRQHandler                     CONCAT(DEBUG_USART_TYPE, CONCAT(DEBUG_USART_NUM, _IRQHandler))
-#define __DEBUG_USARTx                            CONCAT(DEBUG_USART_TYPE, DEBUG_USART_NUM)
-#define __DEBUG_USARTx_CLK_ENABLE()               CONCAT(CONCAT(CONCAT(__HAL_RCC_, DEBUG_USART_TYPE), DEBUG_USART_NUM), _CLK_ENABLE)()
-#define __DEBUG_USARTx_IRQn                       CONCAT(DEBUG_USART_TYPE, CONCAT(DEBUG_USART_NUM, _IRQn))
-
+#define __DEBUG_GPIO_TX_CLK_ENABLE     CONCAT(__HAL_RCC_GPIO, debug_TX_GPIO, _CLK_ENABLE)
+#define __DEBUG_GPIO_RX_CLK_ENABLE     CONCAT(__HAL_RCC_GPIO, debug_RX_GPIO, _CLK_ENABLE)
+#define __DEBUG_DMA_CLK_ENABLE         CONCAT(__HAL_RCC_DMA, debug_DMA, _CLK_ENABLE)
+#define __DEBUG_TX_GPIO                CONCAT(GPIO, debug_TX_GPIO)
+#define __DEBUG_RX_GPIO                CONCAT(GPIO, debug_RX_GPIO)
+#define __DEBUG_TX_PIN                 CONCAT(LL_GPIO_PIN_, debug_TX_PIN)
+#define __DEBUG_RX_PIN                 CONCAT(LL_GPIO_PIN_, debug_RX_PIN)
+#define __DEBUG_TX_AF                  CONCAT(LL_GPIO_AF_, debug_TX_AF)
+#define __DEBUG_RX_AF                  CONCAT(LL_GPIO_AF_, debug_RX_AF)
+#define __DEBUG_DMAx                   CONCAT(DMA, debug_DMA)
+#define __DEBUG_DMA_STREAM             CONCAT(LL_DMA_STREAM_, debug_DMA_STREAM)
+#define __DEBUG_DMA_CHANNEL            CONCAT(LL_DMA_CHANNEL_, debug_DMA_CHANNEL)
+#define __DEBUG_USARTx                 CONCAT(debug_USART_TYPE, debug_USART_NUM)
+#define __DEBUG_USARTx_CLK_ENABLE      CONCAT(__HAL_RCC_, debug_USART_TYPE, debug_USART_NUM, _CLK_ENABLE)
+#define __DEBUG_DMA_ClearFlag_DME      CONCAT(LL_DMA_ClearFlag_DME, debug_DMA_STREAM)
+#define __DEBUG_DMA_ClearFlag_FE       CONCAT(LL_DMA_ClearFlag_FE, debug_DMA_STREAM)
+#define __DEBUG_DMA_ClearFlag_TC       CONCAT(LL_DMA_ClearFlag_TC, debug_DMA_STREAM)
+#define __DEBUG_DMA_ClearFlag_HT       CONCAT(LL_DMA_ClearFlag_HT, debug_DMA_STREAM)
+#define __DEBUG_DMA_ClearFlag_TE       CONCAT(LL_DMA_ClearFlag_TE, debug_DMA_STREAM)
+#define __DEBUG_DMA_IsActiveFlag_TE    CONCAT(LL_DMA_IsActiveFlag_TE, debug_DMA_STREAM)
+#define __DEBUG_DMA_IsActiveFlag_TC    CONCAT(LL_DMA_IsActiveFlag_TC, debug_DMA_STREAM)
 
 __STATIC_INLINE bool drv_hw_driver_init (void) {
   /* ------------------------------------------------------------------------*/
   /* GPIO :: Clock Enable */
-  __DEBUG_UART_GPIO_RX_CLK_ENABLE();
-  __DEBUG_UART_GPIO_TX_CLK_ENABLE();
+  __DEBUG_GPIO_RX_CLK_ENABLE();
+  __DEBUG_GPIO_TX_CLK_ENABLE();
   __DSB();
   /* GPIO :: Mode Alternate */
   LL_GPIO_SetPinMode(__DEBUG_TX_GPIO, __DEBUG_TX_PIN, LL_GPIO_MODE_ALTERNATE);
@@ -109,47 +77,51 @@ __STATIC_INLINE bool drv_hw_driver_init (void) {
   __DEBUG_DMA_CLK_ENABLE();
   __DSB();
   /* DMA :: Disable Line */
-  __DEBUG_DMA_DISABLE_LINE();
-  NVIC_DisableIRQ(__DEBUG_NVIC_IRQn);
+  LL_DMA_DisableStream(__DEBUG_DMAx, __DEBUG_DMA_STREAM);
+  NVIC_DisableIRQ(debug_DMA_IRQn);
   /* DMA :: Clear All Flags */
-  __DEBUG_DMA_ClearFlag_DME();
-  __DEBUG_DMA_ClearFlag_FE();
-  __DEBUG_DMA_ClearFlag_TC();
-  __DEBUG_DMA_ClearFlag_HT();
-  __DEBUG_DMA_ClearFlag_TE();
+  __DEBUG_DMA_ClearFlag_DME(__DEBUG_DMAx);
+  __DEBUG_DMA_ClearFlag_FE(__DEBUG_DMAx);
+  __DEBUG_DMA_ClearFlag_TC(__DEBUG_DMAx);
+  __DEBUG_DMA_ClearFlag_HT(__DEBUG_DMAx);
+  __DEBUG_DMA_ClearFlag_TE(__DEBUG_DMAx);
   /* DMA :: Channel Selection */
-  LL_DMA_SetChannelSelection(__DEBUG_DMAx, __DEBUG_DMA_LINE, __DEBUG_DMA_CHANNEL);
+  LL_DMA_SetChannelSelection(__DEBUG_DMAx, __DEBUG_DMA_STREAM, __DEBUG_DMA_CHANNEL);
   /* DMA :: Line Priority */
-  __DEBUG_DMA_SetLinePriorityLevel(__DEBUG_DMAx, __DEBUG_DMA_LINE, DEBUG_DMA_PRIORITY);
+  LL_DMA_SetStreamPriorityLevel(__DEBUG_DMAx, __DEBUG_DMA_STREAM, debug_DMA_PRIORITY);
   /* DMA :: Memory and Periph Sizes */
-  LL_DMA_SetMemorySize(__DEBUG_DMAx, __DEBUG_DMA_LINE, LL_DMA_MDATAALIGN_BYTE);
-  LL_DMA_SetPeriphSize(__DEBUG_DMAx, __DEBUG_DMA_LINE, LL_DMA_PDATAALIGN_BYTE);
+  LL_DMA_SetMemorySize(__DEBUG_DMAx, __DEBUG_DMA_STREAM, LL_DMA_MDATAALIGN_BYTE);
+  LL_DMA_SetPeriphSize(__DEBUG_DMAx, __DEBUG_DMA_STREAM, LL_DMA_PDATAALIGN_BYTE);
   /* DMA :: Memory and Periph Inc Mode */
-  LL_DMA_SetMemoryIncMode(__DEBUG_DMAx, __DEBUG_DMA_LINE, LL_DMA_MEMORY_INCREMENT);
-  LL_DMA_SetPeriphIncMode(__DEBUG_DMAx, __DEBUG_DMA_LINE, LL_DMA_PERIPH_NOINCREMENT);
-  LL_DMA_SetMode(__DEBUG_DMAx, __DEBUG_DMA_LINE, LL_DMA_MODE_NORMAL);
+  LL_DMA_SetMemoryIncMode(__DEBUG_DMAx, __DEBUG_DMA_STREAM, LL_DMA_MEMORY_INCREMENT);
+  LL_DMA_SetPeriphIncMode(__DEBUG_DMAx, __DEBUG_DMA_STREAM, LL_DMA_PERIPH_NOINCREMENT);
+  LL_DMA_SetMode(__DEBUG_DMAx, __DEBUG_DMA_STREAM, LL_DMA_MODE_NORMAL);
   /* DMA :: Transfer Direction */
-  LL_DMA_SetDataTransferDirection(__DEBUG_DMAx, __DEBUG_DMA_LINE, LL_DMA_DIRECTION_MEMORY_TO_PERIPH);
-  LL_DMA_SetDataLength(__DEBUG_DMAx, __DEBUG_DMA_LINE, 0x0000);
-  LL_DMA_SetPeriphAddress(__DEBUG_DMAx, __DEBUG_DMA_LINE, LL_USART_DMA_GetRegAddr(__DEBUG_USARTx));
+  LL_DMA_SetDataTransferDirection(__DEBUG_DMAx, __DEBUG_DMA_STREAM, LL_DMA_DIRECTION_MEMORY_TO_PERIPH);
+  LL_DMA_SetDataLength(__DEBUG_DMAx, __DEBUG_DMA_STREAM, 0x0000);
+  LL_DMA_SetPeriphAddress(__DEBUG_DMAx, __DEBUG_DMA_STREAM, LL_USART_DMA_GetRegAddr(__DEBUG_USARTx));
   /* ------------------------------------------------------------------------*/
   /* USART :: Clock Enable */
   __DEBUG_USARTx_CLK_ENABLE();
   __DSB();
   LL_USART_Disable(__DEBUG_USARTx);
+  #if debug_RX_ENGINE_ENABLE == YES
   LL_USART_SetTransferDirection(__DEBUG_USARTx, LL_USART_DIRECTION_TX_RX);
-  LL_USART_SetBaudRate(__DEBUG_USARTx, DEBUG_USART_CLOCK_DOMIN_Hz, LL_USART_OVERSAMPLING_16, DEBUG_BAUD_RATE);
+  LL_USART_EnableIT_RXNE(__DEBUG_USARTx);
+  #else 
+  LL_USART_SetTransferDirection(__DEBUG_USARTx, LL_USART_DIRECTION_TX);
+  #endif
+  LL_USART_SetBaudRate(__DEBUG_USARTx, debug_USART_CLOCK_DOMIN_Hz, LL_USART_OVERSAMPLING_16, debug_BAUD_RATE);
   LL_USART_SetDataWidth(__DEBUG_USARTx, LL_USART_DATAWIDTH_8B);
   LL_USART_SetParity(__DEBUG_USARTx, LL_USART_PARITY_NONE);
   LL_USART_SetStopBitsLength(__DEBUG_USARTx, LL_USART_STOPBITS_1);
   LL_USART_ConfigAsyncMode(__DEBUG_USARTx);
   LL_USART_EnableDMAReq_TX(__DEBUG_USARTx);
   LL_USART_DisableIT_TXE(__DEBUG_USARTx);
-  LL_USART_EnableIT_RXNE(__DEBUG_USARTx);
   LL_USART_ClearFlag_RXNE(__DEBUG_USARTx);
-  NVIC_ClearPendingIRQ(__DEBUG_USARTx_IRQn);
-  NVIC_SetPriority(__DEBUG_USARTx_IRQn, DEBUG_UART_IRQ_PRIORITY);
-  NVIC_EnableIRQ(__DEBUG_USARTx_IRQn);
+  NVIC_ClearPendingIRQ(debug_USART_IRQn);
+  NVIC_SetPriority(debug_USART_IRQn, debug_UART_IRQ_PRIORITY);
+  NVIC_EnableIRQ(debug_USART_IRQn);
   LL_USART_Enable(__DEBUG_USARTx);
   __DSB();
   return true;
@@ -165,7 +137,7 @@ __STATIC_INLINE bool drv_hw_driver_init (void) {
  *       should be called before reconfiguring the DMA settings or deactivating the DMA controller.
  */
 __STATIC_INLINE void drv_hw_dma_disable (void) {
-  __DEBUG_DMA_DISABLE_LINE();
+  LL_DMA_DisableStream(__DEBUG_DMAx, __DEBUG_DMA_STREAM);
 }
 //-----------------------------------------------------------------------
 /**
@@ -178,7 +150,7 @@ __STATIC_INLINE void drv_hw_dma_disable (void) {
  *       to start the data transfer via DMA.
  */
 __STATIC_INLINE void drv_hw_dma_enable (void) {
-  __DEBUG_DMA_ENABLE_LINE();
+  LL_DMA_EnableStream(__DEBUG_DMAx, __DEBUG_DMA_STREAM);
 }
 //-----------------------------------------------------------------------
 /**
@@ -191,10 +163,10 @@ __STATIC_INLINE void drv_hw_dma_enable (void) {
  *       to clear the error flags and prepare the DMA for the next transfer attempt.
  */
 __STATIC_INLINE void drv_hw_dma_clearErrorFlags (void) {
-  if (__DEBUG_DMA_IsActiveFlag_TE()) {
-    __DEBUG_DMA_ClearFlag_TE();
-    __DEBUG_DMA_ClearFlag_DME();
-    __DEBUG_DMA_ClearFlag_FE();
+  if (__DEBUG_DMA_IsActiveFlag_TE(__DEBUG_DMAx)) {
+    __DEBUG_DMA_ClearFlag_TE(__DEBUG_DMAx);
+    __DEBUG_DMA_ClearFlag_DME(__DEBUG_DMAx);
+    __DEBUG_DMA_ClearFlag_FE(__DEBUG_DMAx);
   }
 }
 //-----------------------------------------------------------------------
@@ -211,7 +183,7 @@ __STATIC_INLINE void drv_hw_dma_clearErrorFlags (void) {
  *       progress or checking the transfer status.
  */
 __STATIC_INLINE uint16_t drv_hw_dma_get_ndtr (void) {
-  return LL_DMA_GetDataLength(__DEBUG_DMAx, __DEBUG_DMA_LINE);
+  return LL_DMA_GetDataLength(__DEBUG_DMAx, __DEBUG_DMA_STREAM);
 }
 //-----------------------------------------------------------------------
 /**
@@ -228,7 +200,7 @@ __STATIC_INLINE uint16_t drv_hw_dma_get_ndtr (void) {
  *       the DMA transfer to avoid transfer errors or misbehaviors.
  */
 __STATIC_INLINE void drv_hw_dma_set_ndtr (uint16_t ndtr) {
-  LL_DMA_SetDataLength(__DEBUG_DMAx, __DEBUG_DMA_LINE, ndtr);
+  LL_DMA_SetDataLength(__DEBUG_DMAx, __DEBUG_DMA_STREAM, ndtr);
 }
 //-----------------------------------------------------------------------
 /**
@@ -240,7 +212,7 @@ __STATIC_INLINE void drv_hw_dma_set_ndtr (uint16_t ndtr) {
  * @return Returns a non-zero value if the TC flag is set, 0 otherwise.
  */
 __STATIC_INLINE uint32_t drv_hw_dma_get_tc_flag (void) {
-  return __DEBUG_DMA_IsActiveFlag_TC();
+  return __DEBUG_DMA_IsActiveFlag_TC(__DEBUG_DMAx);
 }
 //-----------------------------------------------------------------------
 /**
@@ -252,7 +224,7 @@ __STATIC_INLINE uint32_t drv_hw_dma_get_tc_flag (void) {
  * @param address The memory address to set for the DMA transfer.
  */
 __STATIC_INLINE void drv_hw_dma_set_memory_address (uint32_t address) {
-  LL_DMA_SetMemoryAddress(__DEBUG_DMAx, __DEBUG_DMA_LINE, address);
+  LL_DMA_SetMemoryAddress(__DEBUG_DMAx, __DEBUG_DMA_STREAM, address);
 }
 //-----------------------------------------------------------------------
 /**
@@ -262,7 +234,7 @@ __STATIC_INLINE void drv_hw_dma_set_memory_address (uint32_t address) {
  * indicating that the current transfer is complete and ready for the next one.
  */
 __STATIC_INLINE void drv_hw_dma_clear_tc_flag (void) {
-  __DEBUG_DMA_ClearFlag_TC();
+  __DEBUG_DMA_ClearFlag_TC(__DEBUG_DMAx);
 }
 //-----------------------------------------------------------------------
 /**

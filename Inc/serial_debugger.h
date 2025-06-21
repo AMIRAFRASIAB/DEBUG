@@ -8,7 +8,6 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "serial_debugger.h"
 #include "serial_config.h"
 
 //--------------------------------------------------------------------------------------

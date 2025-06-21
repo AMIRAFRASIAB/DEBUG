@@ -39,21 +39,25 @@ DebugConfig_t debugConf = {
 typedef struct {
   uint32_t           index[2];
   SemaphoreHandle_t  mutex;
-  uint8_t            buf[2][DEBUG_TX_TOTAL_RAM / 2];
+  uint8_t            buf[2][debug_TX_TOTAL_RAM / 2];
   uint8_t            active;
 } Tx_s;
 //------------------------------------------------------------------------
 static const uint8_t  __FOOTER[]          = "\n"     ;
+#if debug_USE_LABLE == YES
 static const uint8_t  __TRACE_LABEL[]     = "<TRC> " ;
 static const uint8_t  __INFO_LABEL[]      = "<INF> " ;
 static const uint8_t  __WARNING_LABEL[]   = "<WRN> " ;
 static const uint8_t  __ERROR_LABEL[]     = "<ERR> " ;
 static const uint8_t  __FATAL_LABEL[]     = "<FTL> " ;
 static const uint8_t* LOG_LEVEL_STRING[]  = {__TRACE_LABEL, __INFO_LABEL, __WARNING_LABEL, __ERROR_LABEL, __FATAL_LABEL};
+#endif //debug_USE_LABLE
 //------------------------------------------------------------------------
+#if debug_USE_TIMESTAMP == YES
 static char                  ts[]        = "00:00:00:000 ";
 static TimerHandle_t         hTsTimer    = NULL; 
 static QueueHandle_t         tsMailBox   = NULL;
+#endif //debug_USE_TIMESTAMP
 static TaskHandle_t          hTaskRx     = NULL;
 static StreamBufferHandle_t  streamRx    = NULL;
 static Tx_s                  tx          = {0};
@@ -74,7 +78,7 @@ static void serviceDebugRx (void* const pvParameters);
  *             less if there is not enough free space in the buffer.
  */
 void __debug_copyFrom (const void* DATA, uint32_t len) {
-  uint32_t freeSpace = (DEBUG_TX_TOTAL_RAM / 2) - tx.index[tx.active];
+  uint32_t freeSpace = (debug_TX_TOTAL_RAM / 2) - tx.index[tx.active];
   len = (freeSpace >= len)? len : freeSpace;
   memcpy(tx.buf[tx.active] + tx.index[tx.active], DATA, len);
   tx.index[tx.active] += len;
@@ -98,6 +102,7 @@ void __debug_copyFrom (const void* DATA, uint32_t len) {
  * @param xTimer The timer handle (not used in the current implementation).
  */
 static void vTimerCallback (TimerHandle_t xTimer) {
+#if debug_USE_TIMESTAMP == YES
   ts[ms1]++;
   if (ts[ms1] == ':') {
     ts[ms1] = '0';
@@ -136,6 +141,7 @@ static void vTimerCallback (TimerHandle_t xTimer) {
     }
   }
   xQueueOverwrite(tsMailBox, ts);
+#endif //debug_USE_TIMESTAMP  
 }
 //------------------------------------------------------------------------
 /**
@@ -180,8 +186,9 @@ static bool __debug_dma_trig_and_swap (void) {
  *
  * @param pvParameters Unused task parameter (can be NULL).
  */
+#if debug_RX_ENGINE_ENABLE == YES
 static void serviceDebugRx(void* const pvParameters) {
-  uint8_t rxBuf[DEBUG_RX_TOTAL_RAM];
+  uint8_t rxBuf[debug_RX_TOTAL_RAM];
   uint16_t cnt = 0;
   bool headerFlag = false;
   while (1) {
@@ -191,7 +198,7 @@ static void serviceDebugRx(void* const pvParameters) {
         /* Packet complete */
         if (cnt > 0) {
           /* Handle the packet here */
-          rxBuf[cnt % DEBUG_RX_TOTAL_RAM] = '\0';
+          rxBuf[cnt % debug_RX_TOTAL_RAM] = '\0';
           hmi_decoder(rxBuf, cnt);
         }
         cnt = 0;
@@ -214,6 +221,7 @@ static void serviceDebugRx(void* const pvParameters) {
   } 
   /* Never reaches here */
 }
+#endif //debug_RX_ENGINE_ENABLE
 //------------------------------------------------------------------------
 /**
  * @brief UART interrupt handler for receiving debug data.
@@ -224,7 +232,7 @@ static void serviceDebugRx(void* const pvParameters) {
  *
  * @note This function should be linked to the UART IRQ used for the debug interface (e.g., USART2).
  */
-void DEBUG_UART_IRQHandler (void) {
+void debug_USART_IRQHandler (void) {
   if (drv_hw_uart_get_rxne_flag() != 0) {
     drv_hw_uart_clear_rxne_flag();
     uint8_t receivedByte = drv_hw_uart_read_byte();
@@ -241,7 +249,7 @@ void DEBUG_UART_IRQHandler (void) {
  *
  * @note This function should be linked to the actual DMA IRQ used for debug transmission.
  */
-void DEBUG_DMA_IRQHandler (void) {
+void debug_DMA_IRQHandler (void) {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
   drv_hw_dma_clearErrorFlags();
   if (drv_hw_dma_get_tc_flag()) {
@@ -267,14 +275,18 @@ void DEBUG_DMA_IRQHandler (void) {
  */
 bool debug_init (void) {
   bool status = true;
+  #if debug_USE_TIMESTAMP == YES
   status = status && (tsMailBox = xQueueCreate(1, sizeof(ts))) != 0;
   status = status && (hTsTimer = xTimerCreate("Timestamp Timer", pdMS_TO_TICKS(1), pdTRUE, NULL, &vTimerCallback)) != 0;
   status = status && (xQueueSend(tsMailBox, ts, 0)) == pdPASS;
   status = status && (xTimerStart(hTsTimer, 0)) == pdPASS;
+  #endif //debug_USE_TIMESTAMP
   status = status && (tx.mutex = xSemaphoreCreateMutex()) != NULL;
-  status = status && (streamRx = xStreamBufferCreate(DEBUG_RX_TOTAL_RAM, 1)) != NULL;
+  #if debug_RX_ENGINE_ENABLE == YES
+  status = status && (streamRx = xStreamBufferCreate(debug_RX_TOTAL_RAM, 1)) != NULL;
+  status = status && xTaskCreate(&serviceDebugRx, "DBG_RX",   debug_RX_STACK_SIZE / 4,   NULL, debug_RX_TASK_PRIORITY,   &hTaskRx)  == pdTRUE;
+  #endif //debug_RX_ENGINE_ENABLE
   status = status && drv_hw_driver_init();
-  status = status && xTaskCreate(&serviceDebugRx, "DBG_RX",   DEBUG_RX_STACK_SIZE / 4,   NULL, DEBUG_RX_TASK_PRIORITY,   &hTaskRx)  == pdTRUE;
   if (status == true) {
     LOG_TRACE("Serial debugger engine initialized successfully");
   }
@@ -292,6 +304,7 @@ static BaseType_t (* const semaphoreTake_Fn[2]) (SemaphoreHandle_t) = {
   __debug_xSemaphoreTakeFromISR,
 };
 //------------------------------------------------------------------------
+#if debug_USE_TIMESTAMP == YES
 static void __debug_getTimestampFromTask (uint8_t* buf) {
   xQueuePeek(tsMailBox, buf, 0);
 }
@@ -302,6 +315,7 @@ static void (* const getTimestamp_Fn[2]) (uint8_t*) = {
   __debug_getTimestampFromTask,
   __debug_getTimestampFromISR,
 };
+#endif //debug_USE_TIMESTAMP
 //------------------------------------------------------------------------
 static void __debug_xSemaphoreGiveFromTask (SemaphoreHandle_t obj) {
   xSemaphoreGive(obj);
@@ -333,39 +347,45 @@ static void (* const semaphoreGive_Fn[2]) (SemaphoreHandle_t) = {
 bool debug_transmit (uint8_t level, uint8_t argLen, const char* FORMAT, ...) {
   uint32_t freeSpace;
   uint32_t __len;
+  #if debug_USE_TIMESTAMP == YES
   uint8_t timestamp[sizeof(ts)];
+  #endif //debug_USE_TIMESTAMP
   bool result = 0;
   if (debugConf.level > level) {
     return result;
   }
   uint8_t context = IS_INSIDE_INTERRUPT();
   if (semaphoreTake_Fn[context](tx.mutex) == pdTRUE) {
+    #if debug_USE_LABLE == YES
     __debug_copyFrom(LOG_LEVEL_STRING[level], sizeof(__TRACE_LABEL) - 1);
+    #endif //debug_USE_LABLE
+    #if debug_USE_TIMESTAMP == YES
     getTimestamp_Fn[context](timestamp);
     __debug_copyFrom(timestamp, sizeof(ts) - 1);
-    #if DEBUG_USE_SPRINTF_FORMATTER == YES
+    #endif //debug_USE_TIMESTAMP
+    #if debug_USE_SPRINTF_FORMATTER == YES
     if (argLen == 1) {
       __debug_copyFrom((uint8_t*)FORMAT, strlen(FORMAT));
     }
     else { 
       va_list args;
       va_start(args, FORMAT);
-      freeSpace = (DEBUG_TX_TOTAL_RAM / 2) - tx.index[tx.active];
+      freeSpace = (debug_TX_TOTAL_RAM / 2) - tx.index[tx.active];
       __len = vsnprintf((char*)(tx.buf[tx.active] + tx.index[tx.active]), freeSpace, FORMAT, args);
       tx.index[tx.active] += (freeSpace > __len)? __len : freeSpace;
       va_end(args);
     }
     #else 
     __debug_copyFrom((uint8_t*)FORMAT, strlen(FORMAT));
-    #endif //DEBUG_USE_SPRINTF_FORMATTER
-    freeSpace = (DEBUG_TX_TOTAL_RAM / 2) - tx.index[tx.active];
+    #endif //debug_USE_SPRINTF_FORMATTER
+    freeSpace = (debug_TX_TOTAL_RAM / 2) - tx.index[tx.active];
     if (freeSpace >= sizeof(__FOOTER) - 1) {
       memcpy(tx.buf[tx.active] + tx.index[tx.active], __FOOTER, sizeof(__FOOTER) - 1);
       tx.index[tx.active] += (sizeof(__FOOTER) - 1);
     }
     else {
-      memcpy(tx.buf[tx.active] + (DEBUG_TX_TOTAL_RAM / 2) - (sizeof(__FOOTER) - 1), __FOOTER, sizeof(__FOOTER) - 1);
-      tx.index[tx.active] = (DEBUG_TX_TOTAL_RAM / 2);
+      memcpy(tx.buf[tx.active] + (debug_TX_TOTAL_RAM / 2) - (sizeof(__FOOTER) - 1), __FOOTER, sizeof(__FOOTER) - 1);
+      tx.index[tx.active] = (debug_TX_TOTAL_RAM / 2);
     }
     __debug_dma_trig_and_swap();
     result = true;
@@ -375,6 +395,8 @@ bool debug_transmit (uint8_t level, uint8_t argLen, const char* FORMAT, ...) {
 }
 //------------------------------------------------------------------------
 void debug_getTimestamp14 (uint8_t* dst) {
+  #if debug_USE_TIMESTAMP == YES 
   getTimestamp_Fn[IS_INSIDE_INTERRUPT()](dst);
+  #endif //debug_USE_TIMESTAMP
 }
 //------------------------------------------------------------------------
